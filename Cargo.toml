@@ -1,0 +1,24 @@
+[package]
+name = "bitcask-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "A Bitcask-style persistent key-value store in Rust."
+license = "MIT"
+
+[lib]
+name = "bitcask_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bitcask-server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "bitcask-cli"
+path = "src/bin/client.rs"
+
+[dependencies]
+
+[dev-dependencies]
+

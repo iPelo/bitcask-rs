@@ -1,0 +1,59 @@
+# Rust build outputs
+/target/
+**/*.rs.bk
+
+# RustRover / JetBrains local project state
+/.idea/
+*.iml
+
+# Other editor-local state
+/.vscode/
+/.zed/
+
+# Operating system noise
+.DS_Store
+Thumbs.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Logs and temporary files
+*.log
+/logs/
+/tmp/
+/temp/
+
+# Runtime database files created while developing the storage engine
+/data/
+/db/
+/store/
+*.data
+*.hint
+*.lock
+*.sqlite
+*.sqlite3
+*.db
+
+# Generated benchmark datasets can become large. Keep the directory shape,
+# but do not commit generated workload payloads by default.
+/workloads/generated/**
+!/workloads/generated/
+!/workloads/generated/.gitkeep
+
+# Benchmark and profiling artifacts
+/bench-results/
+/benchmark-results/
+*.profraw
+*.profdata
+flamegraph.svg

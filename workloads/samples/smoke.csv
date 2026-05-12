@@ -1,0 +1,8 @@
+op,key,value
+put,user:1,alice
+get,user:1,
+put,user:1,bob
+get,user:1,
+delete,user:1,
+get,user:1,
+
