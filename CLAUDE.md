@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **This repository is public.** Never commit secrets, private keys, local tokens, personal machine paths, large generated datasets, or IDE workspace state. The `.gitignore` already excludes `.idea/`, `.env*`, key/cert files (`*.pem`, `*.key`, `*.p12`, `*.pfx`), runtime DB files (`*.data`, `*.hint`, `*.lock`, `/data/`, `/db/`, `/store/`), and `/workloads/generated/**` — preserve these guards.
 
-`bitcask-rs` is in an early scaffold state. Most public methods on `Db` currently return `Error::NotImplemented`. The integration test in `tests/integration.rs` asserts that behavior. When implementing a phase, update or remove those `NotImplemented` assertions accordingly.
+`bitcask-rs` is in an early Phase 2 single-file engine state. `Db::put`, `Db::get`, and `Db::delete` are implemented for one active data file, and `Db::open` rebuilds the in-memory index by scanning that file. Crash recovery hardening, file rotation, compaction, concurrency, networking, and real benchmarks are still pending.
 
 The full project brief and phase roadmap lives in `README-04-systems-rust.md`. `AGENTS.md` contains additional handoff notes on data/git safety.
 
@@ -20,8 +20,8 @@ cargo fmt                   # format (rustfmt component is pinned in rust-toolch
 cargo clippy --all-targets  # lint
 cargo test                  # run all tests
 cargo test --test integration             # run one integration test file
-cargo test put_is_not_implemented_yet     # run a single test by name
-cargo test -- --ignored     # run tests gated with #[ignore] (recovery, property)
+cargo test put_then_get_returns_the_value # run a single test by name
+cargo test -- --ignored     # run tests gated with #[ignore] (currently recovery)
 cargo run --bin bitcask-server
 cargo run --bin bitcask-cli
 ```
@@ -46,7 +46,7 @@ Data flow (target): network → `Request` → `Db` method → `KeyDir` lookup or
 
 - `tests/integration.rs` — exercises the public `Db` API. Uses `target/test-data/…` as the database directory so artifacts land under `target/` (already gitignored).
 - `tests/recovery.rs` — Phase 3; currently `#[ignore]`. Plan is to spawn a child process, kill mid-write, reopen, and verify.
-- `tests/property.rs` — `proptest`-based round-trip checks; currently `#[ignore]`. Add to `dev-dependencies` when implementing.
+- `tests/property.rs` — `proptest`-based round-trip checks against a `HashMap` reference model. `proptest` is already listed in `dev-dependencies`.
 - `benches/kv_bench.rs` — Criterion harness placeholder for Phase 7.
 
 When you implement a feature, replace the matching `#[ignore]` placeholder with the real test rather than adding a parallel file.

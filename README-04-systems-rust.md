@@ -71,16 +71,16 @@ Tombstone = special value-size sentinel (e.g. `u32::MAX`).
 
 ### Phase 1 — Rust foundations + design (Week 1)
 - [ ] Re-read Rust basics: ownership, lifetimes, traits, `Result`/`?`, error types with `thiserror`
-- [ ] Sketch the public API in `lib.rs`: `Db`, `Options`, `put`, `get`, `delete`, `open`
-- [ ] Decide serialization: `bincode` (easy) vs hand-rolled (more control)
-- [ ] Commit `docs/design.md` describing the layout above
+- [x] Sketch the public API in `lib.rs`: `Db`, `Options`, `put`, `get`, `delete`, `open`
+- [x] Decide serialization: `bincode` (easy) vs hand-rolled (more control) — chose hand-rolled; see `docs/design.md`
+- [x] Commit `docs/design.md` describing the layout above
 
 ### Phase 2 — Single-file engine (Week 2)
-- [ ] Open file, append serialized records
-- [ ] Build `HashMap<Vec<u8>, RecordPos>` in memory
-- [ ] `get` via file seek + read + deserialize
-- [ ] Tombstones for `delete`
-- [ ] **Property tests** with `proptest`: `put(k, v)` then `get(k) == Some(v)`; `delete(k)` then `get(k) == None`
+- [x] Open file, append serialized records
+- [x] Build `HashMap<Vec<u8>, RecordPos>` in memory
+- [x] `get` via file seek + read + deserialize
+- [x] Tombstones for `delete`
+- [x] **Property tests** with `proptest`: `put(k, v)` then `get(k) == Some(v)`; `delete(k)` then `get(k) == None`
 
 ### Phase 3 — Crash recovery (Week 3)
 - [ ] On startup, scan file and rebuild `KeyDir`

@@ -21,4 +21,5 @@ path = "src/bin/client.rs"
 [dependencies]
 
 [dev-dependencies]
+proptest = "1"
 

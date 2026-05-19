@@ -7,16 +7,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Errors returned by the storage engine.
 #[derive(Debug)]
 pub enum Error {
+    /// An underlying filesystem operation failed.
     Io(io::Error),
+    /// A record on disk could not be parsed (e.g. a short or truncated header).
     CorruptRecord(String),
+    /// A record's stored checksum did not match its contents.
     CrcMismatch { expected: u32, actual: u32 },
-    NotImplemented(&'static str),
-}
-
-impl Error {
-    pub(crate) fn not_implemented(name: &'static str) -> Self {
-        Self::NotImplemented(name)
-    }
 }
 
 impl fmt::Display for Error {
@@ -27,7 +23,6 @@ impl fmt::Display for Error {
             Self::CrcMismatch { expected, actual } => {
                 write!(f, "crc mismatch: expected {expected}, got {actual}")
             }
-            Self::NotImplemented(name) => write!(f, "{name} is not implemented yet"),
         }
     }
 }
@@ -36,7 +31,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::CorruptRecord(_) | Self::CrcMismatch { .. } | Self::NotImplemented(_) => None,
+            Self::CorruptRecord(_) | Self::CrcMismatch { .. } => None,
         }
     }
 }
@@ -46,4 +41,3 @@ impl From<io::Error> for Error {
         Self::Io(error)
     }
 }
-

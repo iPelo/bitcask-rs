@@ -6,6 +6,9 @@
 /.idea/
 *.iml
 
+# Claude Code local settings
+/.claude/
+
 # Other editor-local state
 /.vscode/
 /.zed/
@@ -41,6 +44,7 @@ id_ed25519.*
 *.data
 *.hint
 *.lock
+!Cargo.lock
 *.sqlite
 *.sqlite3
 *.db
