@@ -20,15 +20,18 @@ Implemented:
 - file rotation using `Options::max_data_file_size`
 - hint files for immutable data files
 - synchronous compaction of immutable files
+- stale-record tracking with `Db::stale_ratio` and `Db::should_compact`
+- optional background compaction scheduler
+- TCP server and CLI client for basic `put`, `get`, and `delete` commands
 - integration, recovery, and property tests
+- crash-mid-compaction recovery coverage
 
 Still planned:
 
-- background compaction scheduling
-- crash-mid-compaction test coverage
 - concurrency around shared database handles
-- TCP server and CLI client
 - real benchmark harnesses and comparison runs
+- production-grade server features such as authentication, TLS, and graceful
+  shutdown
 
 ## Quick Start
 
@@ -49,6 +52,20 @@ assert_eq!(db.get("name")?, None);
 # Ok::<(), bitcask_rs::Error>(())
 ```
 
+Run the TCP server:
+
+```bash
+cargo run --bin bitcask-server -- --path data --addr 127.0.0.1:4000
+```
+
+Use the CLI from another shell:
+
+```bash
+cargo run --bin bitcask-cli -- put name ada
+cargo run --bin bitcask-cli -- get name
+cargo run --bin bitcask-cli -- delete name
+```
+
 ## Repository Layout
 
 ```text
@@ -58,9 +75,9 @@ src/
   record.rs           Binary record format and CRC checks
   keydir.rs           In-memory key index
   log.rs              Data files, recovery, hints, and rotation
-  compaction.rs       Compaction planning
-  server/             Protocol placeholder
-  bin/                Server and client placeholders
+  compaction.rs       Compaction planning and background scheduling
+  server/             TCP protocol types and parsing
+  bin/                Server and client binaries
 tests/                Integration, recovery, and property tests
 benches/              Benchmark placeholders
 workloads/            Benchmark workload samples

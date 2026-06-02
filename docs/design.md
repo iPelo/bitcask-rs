@@ -76,13 +76,27 @@ latest version for their key. Stale overwritten records and tombstones are left
 behind. After rewritten data is synced, compacted input files and their hints are
 removed.
 
-Compaction is currently a synchronous API call. A background scheduler can be
-added once shared access and locking are in place.
+Compaction can be called synchronously through `Db::compact()`. The crate also
+provides a background scheduler that periodically checks `Db::stale_ratio()` and
+runs compaction when the configured threshold is reached. The scheduler shares a
+database through `Arc<Mutex<Db>>`; the public database handle itself is still a
+single mutable handle.
+
+Crash-mid-compaction recovery is covered by a simulated test that restores
+compacted input files after the rewrite phase. On reopen, later data files win,
+so rewritten live values remain visible even if old files are still present.
+
+## TCP Interface
+
+The server binary exposes basic `put`, `get`, and `delete` commands over a small
+newline-delimited protocol. Keys and values are hex-encoded on the wire so the
+protocol can carry arbitrary bytes while remaining easy to inspect.
+
+The current client is intentionally small. It opens one TCP connection per
+command and prints either `OK`, `NOT_FOUND`, or the returned value.
 
 ## Current Limits
 
-- no background compaction thread
-- no crash-mid-compaction child-process test yet
 - no shared concurrent `Db` handle
-- no network server or CLI protocol implementation yet
+- no authentication, TLS, or graceful shutdown for the server
 - benchmark files are placeholders
