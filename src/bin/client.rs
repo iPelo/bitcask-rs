@@ -3,7 +3,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::process;
 
-use bitcask_rs::server::protocol::{encode_hex, parse_response, Request, Response};
+use bitcask_rs::protocol::{encode_hex, parse_response, Request, Response};
 
 fn main() {
     if let Err(error) = run() {
@@ -22,7 +22,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Response::Value(Some(value)) => println!("{}", String::from_utf8_lossy(&value)),
         Response::Value(None) => println!("NOT_FOUND"),
         Response::Error(message) => {
-            return Err(io::Error::new(io::ErrorKind::Other, message).into());
+            return Err(io::Error::other(message).into());
         }
     }
 
@@ -32,11 +32,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn send_request(addr: &str, request: Request) -> Result<Response, Box<dyn std::error::Error>> {
     let mut stream = TcpStream::connect(addr)?;
     let wire_request = match request {
-        Request::Put { key, value } => format!(
-            "PUT {} {}\n",
-            encode_hex(&key),
-            encode_hex(&value)
-        ),
+        Request::Put { key, value } => format!("PUT {} {}\n", encode_hex(&key), encode_hex(&value)),
         Request::Get { key } => format!("GET {}\n", encode_hex(&key)),
         Request::Delete { key } => format!("DELETE {}\n", encode_hex(&key)),
     };
@@ -60,7 +56,7 @@ impl Command {
         let mut addr = "127.0.0.1:4000".to_owned();
         let mut rest = Vec::new();
 
-        let mut args = args.peekable();
+        let mut args = args;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--addr" => {

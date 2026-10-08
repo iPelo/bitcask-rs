@@ -162,7 +162,10 @@ mod tests {
     #[test]
     fn response_round_trips() {
         let response = Response::Value(Some(b"value".to_vec()));
-        assert_eq!(parse_response(&format_response(&response)).unwrap(), response);
+        assert_eq!(
+            parse_response(&format_response(&response)).unwrap(),
+            response
+        );
     }
 
     #[test]

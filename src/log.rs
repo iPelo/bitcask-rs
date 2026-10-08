@@ -2,8 +2,13 @@
 //!
 //! Reads and writes use positioned I/O (`pread`/`pwrite` via
 //! [`std::os::unix::fs::FileExt`]) so the file cursor is never touched.
+//!
+//! Startup truncates the active file at its first invalid record, discarding
+//! any later bytes. Hint files cache record positions but have no checksum;
+//! record reads still check CRCs. Directory metadata is not synced, so file
+//! creation and deletion are not guaranteed to survive power loss.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::FileExt;
@@ -11,8 +16,19 @@ use std::path::{Path, PathBuf};
 
 use crate::compaction::CompactionPlan;
 use crate::error::{Error, Result};
-use crate::keydir::RecordPos;
 use crate::record::{Record, RecordHeader, HEADER_LEN};
+
+/// File and byte range for the latest record for a key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordPos {
+    pub file_id: u64,
+    pub offset: u64,
+    pub size: u64,
+    pub timestamp: u64,
+}
+
+/// In-memory index from key bytes to their latest on-disk position.
+pub type KeyDir = HashMap<Vec<u8>, RecordPos>;
 
 const HINT_MAGIC: &[u8; 8] = b"BCHINT1\n";
 const HINT_HEADER_LEN: usize = 16;
@@ -38,6 +54,11 @@ impl DataFileId {
 struct DataFile {
     file: File,
     len: u64,
+}
+
+struct FileScan {
+    records: Vec<(Record, RecordPos)>,
+    truncate_to: Option<u64>,
 }
 
 /// Compact startup metadata for one record in a data file.
@@ -73,13 +94,10 @@ impl Log {
             file_ids.push(DataFileId(1));
         }
 
-        let active_file_id = *file_ids
-            .iter()
-            .max()
-            .expect("file_ids is seeded when empty");
+        let active_file_id = *file_ids.last().expect("file_ids is seeded when empty");
         let mut files = BTreeMap::new();
         for file_id in file_ids {
-            files.insert(file_id, open_data_file(&directory, file_id, true)?);
+            files.insert(file_id, open_data_file(&directory, file_id)?);
         }
 
         Ok(Self {
@@ -153,7 +171,7 @@ impl Log {
     /// Scan a single data file strictly, returning an error for malformed data.
     pub fn scan_file(&self, file_id: DataFileId) -> Result<Vec<(Record, RecordPos)>> {
         let file = self.get_file(file_id)?;
-        scan_open_file(file_id, &file.file, file.len, false).map(|(records, _)| records)
+        Ok(scan_open_file(file_id, &file.file, file.len, false)?.records)
     }
 
     /// Create a compaction plan for all immutable files.
@@ -222,18 +240,20 @@ impl Log {
     ) -> Result<Vec<LogEntry>> {
         let file_len = self.get_file(file_id)?.len;
         if !recover_tail {
-            if let Some(entries) = read_hint_file(&self.hint_path_for(file_id), file_id, file_len)? {
+            if let Some(entries) = read_hint_file(&self.hint_path_for(file_id), file_id, file_len)?
+            {
                 return Ok(entries);
             }
         }
 
         let file = self.get_file(file_id)?;
-        let (records, truncate_to) = scan_open_file(file_id, &file.file, file_len, recover_tail)?;
-        if let Some(offset) = truncate_to {
+        let scan = scan_open_file(file_id, &file.file, file_len, recover_tail)?;
+        if let Some(offset) = scan.truncate_to {
             self.truncate_file(file_id, offset)?;
         }
 
-        let entries = records
+        let entries = scan
+            .records
             .into_iter()
             .map(|(record, position)| {
                 let is_tombstone = record.is_tombstone();
@@ -325,12 +345,13 @@ fn parse_data_file_id(path: &Path) -> Option<DataFileId> {
     number.parse().ok().map(DataFileId)
 }
 
-fn open_data_file(directory: &Path, file_id: DataFileId, create: bool) -> Result<DataFile> {
+fn open_data_file(directory: &Path, file_id: DataFileId) -> Result<DataFile> {
     let path = directory.join(file_id.file_name());
     let file = OpenOptions::new()
         .read(true)
         .write(true)
-        .create(create)
+        .create(true)
+        .truncate(false)
         .open(path)?;
     let len = file.metadata()?.len();
     Ok(DataFile { file, len })
@@ -424,7 +445,9 @@ fn write_hint_file(path: &Path, data_len: u64, entries: &[LogEntry]) -> Result<(
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
     let end = offset + 4;
     if end > bytes.len() {
-        return Err(Error::CorruptRecord("hint file ended while reading u32".into()));
+        return Err(Error::CorruptRecord(
+            "hint file ended while reading u32".into(),
+        ));
     }
     Ok(u32::from_le_bytes(bytes[offset..end].try_into().unwrap()))
 }
@@ -432,7 +455,9 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
     let end = offset + 8;
     if end > bytes.len() {
-        return Err(Error::CorruptRecord("hint file ended while reading u64".into()));
+        return Err(Error::CorruptRecord(
+            "hint file ended while reading u64".into(),
+        ));
     }
     Ok(u64::from_le_bytes(bytes[offset..end].try_into().unwrap()))
 }
@@ -442,7 +467,7 @@ fn scan_open_file(
     file: &File,
     len: u64,
     recover_tail: bool,
-) -> Result<(Vec<(Record, RecordPos)>, Option<u64>)> {
+) -> Result<FileScan> {
     let mut records = Vec::new();
     let mut offset = 0u64;
 
@@ -505,7 +530,10 @@ fn scan_open_file(
         offset += size_u64;
     }
 
-    Ok((records, None))
+    Ok(FileScan {
+        records,
+        truncate_to: None,
+    })
 }
 
 fn handle_scan_error(
@@ -513,9 +541,12 @@ fn handle_scan_error(
     records: Vec<(Record, RecordPos)>,
     offset: u64,
     error: Error,
-) -> Result<(Vec<(Record, RecordPos)>, Option<u64>)> {
+) -> Result<FileScan> {
     if recover_tail {
-        Ok((records, Some(offset)))
+        Ok(FileScan {
+            records,
+            truncate_to: Some(offset),
+        })
     } else {
         Err(error)
     }

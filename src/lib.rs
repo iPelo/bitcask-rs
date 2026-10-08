@@ -6,25 +6,31 @@
 
 pub mod compaction;
 pub mod error;
-pub mod keydir;
 pub mod log;
+pub mod protocol;
 pub mod record;
-pub mod server;
 
-use std::fs;
+// Keep the original import paths available after combining the source files.
+pub mod keydir {
+    pub use crate::log::{KeyDir, RecordPos};
+}
+
+pub mod server {
+    pub use crate::protocol;
+}
+
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use error::{Error, Result};
 
-use keydir::KeyDir;
-use log::Log;
+use log::{KeyDir, Log};
 use record::Record;
 
 /// Configuration used when opening a database.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
-    /// Directory that contains data files, hint files, and lock files.
+    /// Directory that contains data files and hint files.
     pub path: PathBuf,
     /// Whether each write should be synced to durable storage before returning.
     pub sync_on_write: bool,
@@ -51,9 +57,6 @@ pub struct Db {
     keydir: KeyDir,
     /// Total number of records appended to the log (including stale ones).
     total_appends: usize,
-    /// Records that are no longer the latest for their key and will be
-    /// reclaimed by the next compaction pass.
-    stale_appends: usize,
 }
 
 impl Db {
@@ -67,7 +70,6 @@ impl Db {
     /// The data directory is created if it does not exist, and the in-memory
     /// index is rebuilt by scanning data files.
     pub fn open_with_options(options: Options) -> Result<Self> {
-        fs::create_dir_all(&options.path)?;
         let mut log = Log::open(
             &options.path,
             options.sync_on_write,
@@ -84,16 +86,11 @@ impl Db {
                 keydir.insert(entry.key, entry.position);
             }
         }
-        // Every on-disk record that is not currently the latest for its key
-        // is stale and will be reclaimed by compaction.
-        let stale_appends = total_appends.saturating_sub(keydir.len());
-
         Ok(Self {
             options,
             log,
             keydir,
             total_appends,
-            stale_appends,
         })
     }
 
@@ -102,10 +99,7 @@ impl Db {
         let record = Record::put(now_millis(), key.as_ref(), value.as_ref());
         let position = self.log.append(&record)?;
         self.total_appends += 1;
-        if self.keydir.insert(record.key, position).is_some() {
-            // The previous record for this key is now stale.
-            self.stale_appends += 1;
-        }
+        self.keydir.insert(record.key, position);
         Ok(())
     }
 
@@ -125,21 +119,13 @@ impl Db {
         let record = Record::tombstone(now_millis(), key);
         self.log.append(&record)?;
         self.total_appends += 1;
-        if self.keydir.remove(key).is_some() {
-            // The deleted value record is now stale.
-            self.stale_appends += 1;
-        } else {
-            // Tombstone written for a key that does not exist — the tombstone
-            // itself is immediately stale.
-            self.stale_appends += 1;
-        }
+        self.keydir.remove(key);
         Ok(())
     }
 
     /// Rewrite live records from immutable data files and remove stale files.
     ///
-    /// After compaction the stale-record counters are reset so the background
-    /// scheduler does not trigger again immediately.
+    /// Stale records in the active file remain until a later compaction pass.
     pub fn compact(&mut self) -> Result<()> {
         let plan = self.log.compaction_plan();
         if plan.is_empty() {
@@ -164,10 +150,8 @@ impl Db {
         self.log.sync_all_data_files()?;
         self.log.remove_files(&plan.input_files)?;
 
-        // Reset stale-record accounting: every key now has exactly one live
-        // record on disk, so the ratio is 0.
-        self.total_appends = self.keydir.len();
-        self.stale_appends = 0;
+        // The original active file may still contain stale records.
+        self.total_appends = self.log.scan()?.len();
 
         Ok(())
     }
@@ -194,7 +178,8 @@ impl Db {
         if self.total_appends == 0 {
             return 0.0;
         }
-        self.stale_appends as f64 / self.total_appends as f64
+        let stale_records = self.total_appends.saturating_sub(self.keydir.len());
+        stale_records as f64 / self.total_appends as f64
     }
 
     /// Return `true` when the stale record ratio meets or exceeds `threshold`.
@@ -255,9 +240,9 @@ mod tests {
     #[test]
     fn stale_ratio_increases_on_delete() {
         let mut db = fresh_db("stale-delete");
-        db.put("k", "v").unwrap(); // total=1 stale=0
-        db.delete("k").unwrap();   // total=2 stale=1 → 0.5
-        assert_eq!(db.stale_ratio(), 0.5);
+        db.put("k", "v").unwrap();
+        db.delete("k").unwrap();
+        assert_eq!(db.stale_ratio(), 1.0);
     }
 
     #[test]

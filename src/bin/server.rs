@@ -5,7 +5,7 @@ use std::process;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use bitcask_rs::server::protocol::{format_response, parse_request, Request, Response};
+use bitcask_rs::protocol::{format_response, parse_request, Request, Response};
 use bitcask_rs::Db;
 
 fn main() {
@@ -63,19 +63,15 @@ fn execute(request: Request, db: &Arc<Mutex<Db>>) -> Response {
         Err(_) => return Response::Error("database lock is poisoned".to_owned()),
     };
 
-    match request {
-        Request::Put { key, value } => guard
-            .put(key, value)
-            .map(|_| Response::Ok)
-            .unwrap_or_else(|error| Response::Error(error.to_string())),
-        Request::Get { key } => guard
-            .get(key)
-            .map(Response::Value)
-            .unwrap_or_else(|error| Response::Error(error.to_string())),
-        Request::Delete { key } => guard
-            .delete(key)
-            .map(|_| Response::Ok)
-            .unwrap_or_else(|error| Response::Error(error.to_string())),
+    let result = match request {
+        Request::Put { key, value } => guard.put(key, value).map(|_| Response::Ok),
+        Request::Get { key } => guard.get(key).map(Response::Value),
+        Request::Delete { key } => guard.delete(key).map(|_| Response::Ok),
+    };
+
+    match result {
+        Ok(response) => response,
+        Err(error) => Response::Error(error.to_string()),
     }
 }
 

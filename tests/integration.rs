@@ -205,10 +205,7 @@ fn compaction_stress_preserves_latest_values() {
     }
     for key_id in 10..20u8 {
         let key = format!("key:{key_id}");
-        assert_eq!(
-            db.get(key.as_bytes()).expect("get"),
-            Some(vec![49, key_id])
-        );
+        assert_eq!(db.get(key.as_bytes()).expect("get"), Some(vec![49, key_id]));
     }
 
     drop(db);
@@ -216,9 +213,6 @@ fn compaction_stress_preserves_latest_values() {
     assert_eq!(db.len(), 10);
     for key_id in 10..20u8 {
         let key = format!("key:{key_id}");
-        assert_eq!(
-            db.get(key.as_bytes()).expect("get"),
-            Some(vec![49, key_id])
-        );
+        assert_eq!(db.get(key.as_bytes()).expect("get"), Some(vec![49, key_id]));
     }
 }

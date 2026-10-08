@@ -15,10 +15,6 @@ fn fresh_db_small_files(name: &str) -> (String, Db) {
     (path, db)
 }
 
-// ---------------------------------------------------------------------------
-// should_compact() / stale_ratio() unit-level checks
-// ---------------------------------------------------------------------------
-
 #[test]
 fn fresh_db_has_zero_stale_ratio() {
     let (_, db) = fresh_db_small_files("ratio-fresh");
@@ -52,16 +48,7 @@ fn compact_resets_stale_ratio_to_zero() {
     assert_eq!(db.stale_ratio(), 0.0);
 }
 
-// ---------------------------------------------------------------------------
-// Scheduler integration test
-// ---------------------------------------------------------------------------
-
-/// Start the scheduler with a very short interval, accumulate enough stale
-/// records to exceed the threshold, then verify that compaction has run by
-/// the time we stop the scheduler.
-///
-/// Uses a 20 ms check interval and waits up to 500 ms — that is 25 chances
-/// for the scheduler to fire, making the test robust against scheduler jitter.
+// Poll until the scheduler has compacted, allowing time for thread scheduling.
 #[test]
 fn scheduler_triggers_compaction_automatically() {
     let path = "target/test-data/sched-auto";
@@ -133,4 +120,57 @@ fn dropping_scheduler_stops_thread() {
 
     // Drop immediately — must not hang or panic.
     drop(sched);
+}
+
+#[test]
+fn stopping_scheduler_interrupts_a_long_interval() {
+    let (_, db) = fresh_db_small_files("stop-long-interval");
+    let scheduler = CompactionScheduler::start(
+        Arc::new(Mutex::new(db)),
+        SchedulerOptions {
+            check_interval: Duration::from_secs(30),
+            stale_ratio_threshold: 0.3,
+        },
+    );
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        scheduler.stop();
+        sender.send(()).unwrap();
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("scheduler should stop without waiting for its interval");
+}
+
+#[test]
+fn compaction_keeps_counting_stale_records_in_the_active_file() {
+    let path = "target/test-data/sched-active-stale";
+    let _ = std::fs::remove_dir_all(path);
+    let mut options = Options::new(path);
+    options.max_data_file_size = 100;
+    let mut db = Db::open_with_options(options).unwrap();
+
+    db.put("old", vec![0; 60]).unwrap();
+    db.put("k", "first").unwrap();
+    db.put("k", "second").unwrap();
+    db.compact().unwrap();
+
+    // Two live keys and one overwritten record remain on disk.
+    assert_eq!(db.stale_ratio(), 1.0 / 3.0);
+    assert_eq!(db.get("k").unwrap(), Some(b"second".to_vec()));
+    drop(db);
+    let db = Db::open(path).unwrap();
+    assert_eq!(db.stale_ratio(), 1.0 / 3.0);
+}
+
+#[test]
+fn deleting_keys_keeps_the_same_ratio_after_reopening() {
+    let (path, mut db) = fresh_db_small_files("delete-ratio");
+    db.put("k", "value").unwrap();
+    db.delete("k").unwrap();
+    db.delete("missing").unwrap();
+    assert_eq!(db.stale_ratio(), 1.0);
+    drop(db);
+    let db = Db::open(path).unwrap();
+    assert_eq!(db.stale_ratio(), 1.0);
 }

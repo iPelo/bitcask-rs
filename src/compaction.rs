@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -71,26 +71,20 @@ impl Default for SchedulerOptions {
 /// // The scheduler stops when `_sched` is dropped.
 /// ```
 pub struct CompactionScheduler {
-    shutdown: Arc<AtomicBool>,
+    shutdown: Sender<()>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl CompactionScheduler {
     /// Spawn the background compaction thread.
     pub fn start(db: Arc<Mutex<Db>>, options: SchedulerOptions) -> Self {
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_flag = Arc::clone(&shutdown);
+        let (shutdown, receiver) = mpsc::channel();
 
         let thread = thread::spawn(move || {
-            loop {
-                thread::sleep(options.check_interval);
-
-                if shutdown_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-
+            while let Err(RecvTimeoutError::Timeout) = receiver.recv_timeout(options.check_interval)
+            {
                 let mut guard = match db.lock() {
-                    Ok(g) => g,
+                    Ok(guard) => guard,
                     Err(_) => break, // mutex poisoned — give up
                 };
 
@@ -114,7 +108,7 @@ impl CompactionScheduler {
     }
 
     fn shutdown(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = self.shutdown.send(());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }

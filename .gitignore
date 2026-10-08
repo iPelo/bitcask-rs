@@ -53,21 +53,9 @@ id_ed25519.*
 /store/
 *.data
 *.hint
+*.hint.tmp
 *.lock
 !Cargo.lock
 *.sqlite
 *.sqlite3
 *.db
-
-# Generated benchmark datasets can become large. Keep the directory shape,
-# but do not commit generated workload payloads by default.
-/workloads/generated/**
-!/workloads/generated/
-!/workloads/generated/.gitkeep
-
-# Benchmark and profiling artifacts
-/bench-results/
-/benchmark-results/
-*.profraw
-*.profdata
-flamegraph.svg
