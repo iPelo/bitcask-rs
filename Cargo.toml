@@ -16,4 +16,9 @@ name = "bitcask-cli"
 path = "src/bin/client.rs"
 
 [dev-dependencies]
+criterion = "0.7.0"
 proptest = "1"
+
+[[bench]]
+name = "kv"
+harness = false
