@@ -96,7 +96,9 @@ impl Db {
 
     /// Append a value for `key` and update the in-memory index.
     pub fn put(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Result<()> {
-        let record = Record::put(now_millis(), key.as_ref(), value.as_ref());
+        let (key, value) = (key.as_ref(), value.as_ref());
+        record::check_sizes(key.len(), Some(value.len()))?;
+        let record = Record::put(now_millis(), key, value);
         let position = self.log.append(&record)?;
         self.total_appends += 1;
         self.keydir.insert(record.key, position);
@@ -116,6 +118,7 @@ impl Db {
     /// Append a tombstone for `key` and remove it from the in-memory index.
     pub fn delete(&mut self, key: impl AsRef<[u8]>) -> Result<()> {
         let key = key.as_ref();
+        record::check_sizes(key.len(), None)?;
         let record = Record::tombstone(now_millis(), key);
         self.log.append(&record)?;
         self.total_appends += 1;

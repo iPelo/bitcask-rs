@@ -25,6 +25,40 @@ pub const HEADER_LEN: usize = 4 + 8 + 4 + 4;
 /// Value-size sentinel used to represent a deleted key.
 pub const TOMBSTONE_VALUE_SIZE: u32 = u32::MAX;
 
+/// Longest key that fits in the 32-bit key-size field.
+///
+/// Kept one below `u32::MAX` so both size fields share the same limit.
+pub const MAX_KEY_LEN: usize = u32::MAX as usize - 1;
+
+/// Longest value that fits in the value-size field without colliding with
+/// [`TOMBSTONE_VALUE_SIZE`].
+pub const MAX_VALUE_LEN: usize = TOMBSTONE_VALUE_SIZE as usize - 1;
+
+/// Check that a key (and value, for a put) fit in the record header fields.
+///
+/// Returns [`Error::TooLarge`] instead of letting [`Record::encode`] truncate
+/// the lengths, which would corrupt the record or turn a value into a
+/// tombstone.
+pub fn check_sizes(key_len: usize, value_len: Option<usize>) -> Result<()> {
+    if key_len > MAX_KEY_LEN {
+        return Err(Error::TooLarge {
+            field: "key",
+            len: key_len,
+            max: MAX_KEY_LEN,
+        });
+    }
+    if let Some(value_len) = value_len {
+        if value_len > MAX_VALUE_LEN {
+            return Err(Error::TooLarge {
+                field: "value",
+                len: value_len,
+                max: MAX_VALUE_LEN,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Fixed metadata that prefixes every on-disk record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecordHeader {
@@ -105,7 +139,11 @@ impl Record {
     }
 
     /// Serialize the record to its on-disk byte layout, including the CRC.
+    ///
+    /// Callers must check lengths with [`check_sizes`] first; oversized keys
+    /// or values cannot be represented in the header.
     pub fn encode(&self) -> Vec<u8> {
+        debug_assert!(check_sizes(self.key.len(), self.value.as_ref().map(Vec::len)).is_ok());
         let (value_size, value_bytes): (u32, &[u8]) = match &self.value {
             Some(value) => (value.len() as u32, value.as_slice()),
             None => (TOMBSTONE_VALUE_SIZE, &[]),
@@ -236,6 +274,28 @@ mod tests {
         assert!(matches!(
             Record::decode(&encoded),
             Err(Error::CrcMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn sizes_up_to_the_limits_are_accepted() {
+        assert!(check_sizes(0, None).is_ok());
+        assert!(check_sizes(MAX_KEY_LEN, Some(MAX_VALUE_LEN)).is_ok());
+    }
+
+    #[test]
+    fn oversized_key_is_rejected() {
+        assert!(matches!(
+            check_sizes(u32::MAX as usize, None),
+            Err(Error::TooLarge { field: "key", .. })
+        ));
+    }
+
+    #[test]
+    fn value_matching_the_tombstone_sentinel_is_rejected() {
+        assert!(matches!(
+            check_sizes(1, Some(TOMBSTONE_VALUE_SIZE as usize)),
+            Err(Error::TooLarge { field: "value", .. })
         ));
     }
 

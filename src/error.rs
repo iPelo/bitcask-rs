@@ -13,6 +13,12 @@ pub enum Error {
     CorruptRecord(String),
     /// A record's stored checksum did not match its contents.
     CrcMismatch { expected: u32, actual: u32 },
+    /// A key or value is too long to be stored in the record format.
+    TooLarge {
+        field: &'static str,
+        len: usize,
+        max: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -23,6 +29,9 @@ impl fmt::Display for Error {
             Self::CrcMismatch { expected, actual } => {
                 write!(f, "crc mismatch: expected {expected}, got {actual}")
             }
+            Self::TooLarge { field, len, max } => {
+                write!(f, "{field} too large: {len} bytes (max {max})")
+            }
         }
     }
 }
@@ -31,7 +40,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::CorruptRecord(_) | Self::CrcMismatch { .. } => None,
+            Self::CorruptRecord(_) | Self::CrcMismatch { .. } | Self::TooLarge { .. } => None,
         }
     }
 }
