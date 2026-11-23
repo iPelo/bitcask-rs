@@ -77,13 +77,24 @@ file's hint was used instead.
 
 Measured with `cargo bench` (criterion, median of the run) on a MacBook Pro
 (Apple M4 Pro, 14 cores, 48 GB RAM, internal APFS SSD), macOS 27.0.1,
-rustc 1.100.0, on AC power. Default options: writes are not synced per call.
+rustc 1.100.0, on AC power.
 
 | Benchmark | Workload | Median time | Throughput |
 | --- | --- | --- | --- |
-| `put` | 16 B key, 100 B value, 10k distinct keys | 2.56 µs | ~390k ops/s |
-| `get` | hit, 10k keys indexed | 623 ns | ~1.6M ops/s |
+| `put` | 16 B key, 100 B value, 10k distinct keys, `sync_on_write` off | 2.56 µs | ~390k ops/s |
+| `get` | hit, 10k keys indexed, data likely in the OS page cache | 623 ns | ~1.6M ops/s |
 | `compact` | 10k live keys, 40k records (75% stale), 1 MiB files | 156.5 ms | ~256k records/s |
+
+What these numbers do and do not measure:
+
+- `put` runs with the default `sync_on_write = false`, so each write lands
+  in the OS page cache and is not flushed to the SSD. With `sync_on_write`
+  on, every put waits for a sync and is much slower.
+- `get` reads from a ~1.4 MB data file written just before the run. That
+  file is almost certainly still in the OS page cache, so this measures the
+  index lookup, a cached `pread` and the CRC check, not SSD read latency.
+- `compact` includes syncing the rewritten data files before the old files
+  are deleted.
 
 Numbers vary by machine and filesystem; rerun `cargo bench` to compare.
 
