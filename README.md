@@ -118,7 +118,7 @@ if db.should_compact(0.3) {
 ```
 
 `Db::open(path)` uses the default options. To compact automatically, wrap the
-database in `Arc<Mutex<Db>>` and start a
+database in `Arc<RwLock<Db>>` and start a
 `compaction::CompactionScheduler`.
 
 ### Server and client

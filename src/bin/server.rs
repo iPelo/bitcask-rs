@@ -2,7 +2,7 @@ use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::thread;
 
 use bitcask_rs::compaction::{CompactionScheduler, SchedulerOptions};
@@ -25,7 +25,7 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_args(env::args().skip(1))
         .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
-    let db = Arc::new(Mutex::new(Db::open(&config.path)?));
+    let db = Arc::new(RwLock::new(Db::open(&config.path)?));
     let listener = TcpListener::bind(&config.addr)?;
     let _scheduler = CompactionScheduler::start(
         Arc::clone(&db),
@@ -53,7 +53,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn handle_client(stream: TcpStream, db: Arc<Mutex<Db>>) -> io::Result<()> {
+fn handle_client(stream: TcpStream, db: Arc<RwLock<Db>>) -> io::Result<()> {
     let reader = BufReader::new(stream.try_clone()?);
     serve(reader, stream, &db)
 }
@@ -62,7 +62,7 @@ fn handle_client(stream: TcpStream, db: Arc<Mutex<Db>>) -> io::Result<()> {
 ///
 /// A line longer than [`MAX_REQUEST_LINE_LEN`] gets an error response and
 /// ends the connection, since the rest of the stream can no longer be framed.
-fn serve(mut reader: impl BufRead, mut writer: impl Write, db: &Arc<Mutex<Db>>) -> io::Result<()> {
+fn serve(mut reader: impl BufRead, mut writer: impl Write, db: &Arc<RwLock<Db>>) -> io::Result<()> {
     let mut line = Vec::new();
 
     loop {
@@ -91,16 +91,24 @@ fn serve(mut reader: impl BufRead, mut writer: impl Write, db: &Arc<Mutex<Db>>) 
     }
 }
 
-fn execute(request: Request, db: &Arc<Mutex<Db>>) -> Response {
-    let mut guard = match db.lock() {
-        Ok(guard) => guard,
-        Err(_) => return Response::Error("database lock is poisoned".to_owned()),
-    };
+/// Run one request. `GET` shares the read lock so reads from different
+/// clients run concurrently; `PUT` and `DELETE` take the write lock.
+fn execute(request: Request, db: &Arc<RwLock<Db>>) -> Response {
+    const POISONED: &str = "database lock is poisoned";
 
     let result = match request {
-        Request::Put { key, value } => guard.put(key, value).map(|_| Response::Ok),
-        Request::Get { key } => guard.get(key).map(Response::Value),
-        Request::Delete { key } => guard.delete(key).map(|_| Response::Ok),
+        Request::Get { key } => match db.read() {
+            Ok(guard) => guard.get(key).map(Response::Value),
+            Err(_) => return Response::Error(POISONED.to_owned()),
+        },
+        Request::Put { key, value } => match db.write() {
+            Ok(mut guard) => guard.put(key, value).map(|_| Response::Ok),
+            Err(_) => return Response::Error(POISONED.to_owned()),
+        },
+        Request::Delete { key } => match db.write() {
+            Ok(mut guard) => guard.delete(key).map(|_| Response::Ok),
+            Err(_) => return Response::Error(POISONED.to_owned()),
+        },
     };
 
     match result {
@@ -167,13 +175,13 @@ fn usage() -> String {
 mod tests {
     use super::*;
 
-    fn test_db(name: &str) -> Arc<Mutex<Db>> {
+    fn test_db(name: &str) -> Arc<RwLock<Db>> {
         let path = format!("target/test-data/server-{name}");
         let _ = std::fs::remove_dir_all(&path);
-        Arc::new(Mutex::new(Db::open(&path).expect("open database")))
+        Arc::new(RwLock::new(Db::open(&path).expect("open database")))
     }
 
-    fn serve_input(db: &Arc<Mutex<Db>>, input: &[u8]) -> String {
+    fn serve_input(db: &Arc<RwLock<Db>>, input: &[u8]) -> String {
         let mut output = Vec::new();
         serve(input, &mut output, db).expect("serve");
         String::from_utf8(output).expect("utf-8 response")
@@ -196,7 +204,7 @@ mod tests {
         let output = serve_input(&db, &input);
 
         assert_eq!(output, "ERROR request too large\n");
-        assert!(db.lock().unwrap().is_empty());
+        assert!(db.read().unwrap().is_empty());
     }
 
     #[test]
@@ -207,6 +215,26 @@ mod tests {
         input.push(b'\n');
 
         assert_eq!(serve_input(&db, &input), "OK\n");
+    }
+
+    #[test]
+    fn get_runs_while_another_reader_holds_the_lock() {
+        let db = test_db("shared-read");
+        serve_input(&db, b"PUT 6b 76\n");
+        let _reader = db.read().unwrap();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let db_for_client = Arc::clone(&db);
+        std::thread::spawn(move || {
+            sender
+                .send(serve_input(&db_for_client, b"GET 6b\n"))
+                .unwrap();
+        });
+
+        let output = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("GET should not wait for other readers");
+        assert_eq!(output, "VALUE 76\n");
     }
 
     #[test]

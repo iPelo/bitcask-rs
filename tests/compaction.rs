@@ -1,6 +1,6 @@
 //! Tests for the background compaction scheduler.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use bitcask_rs::compaction::{CompactionScheduler, SchedulerOptions};
@@ -56,13 +56,13 @@ fn scheduler_triggers_compaction_automatically() {
     let mut opts = Options::new(path);
     opts.max_data_file_size = 50;
 
-    let db = Arc::new(Mutex::new(
+    let db = Arc::new(RwLock::new(
         Db::open_with_options(opts.clone()).expect("open"),
     ));
 
     // Write enough overwrites to push the stale ratio well above 0.3.
     {
-        let mut guard = db.lock().unwrap();
+        let mut guard = db.write().unwrap();
         guard.put("a", vec![0u8; 16]).unwrap(); // file 1
         guard.put("a", vec![1u8; 16]).unwrap(); // file 2  → a_v1 stale
         guard.put("b", vec![2u8; 16]).unwrap(); // file 3
@@ -85,7 +85,7 @@ fn scheduler_triggers_compaction_automatically() {
     let deadline = std::time::Instant::now() + Duration::from_millis(500);
     loop {
         std::thread::sleep(Duration::from_millis(20));
-        let guard = db.lock().unwrap();
+        let guard = db.read().unwrap();
         if !guard.should_compact(0.3) {
             break; // compaction ran and reset the ratio
         }
@@ -97,7 +97,7 @@ fn scheduler_triggers_compaction_automatically() {
     scheduler.stop();
 
     // Verify data integrity after background compaction.
-    let guard = db.lock().unwrap();
+    let guard = db.read().unwrap();
     assert_eq!(guard.get("a").unwrap(), Some(vec![1u8; 16]));
     assert_eq!(guard.get("b").unwrap(), Some(vec![3u8; 16]));
     assert_eq!(guard.len(), 2);
@@ -108,7 +108,7 @@ fn scheduler_triggers_compaction_automatically() {
 fn dropping_scheduler_stops_thread() {
     let path = "target/test-data/sched-drop";
     let _ = std::fs::remove_dir_all(path);
-    let db = Arc::new(Mutex::new(Db::open(path).expect("open")));
+    let db = Arc::new(RwLock::new(Db::open(path).expect("open")));
 
     let sched = CompactionScheduler::start(
         Arc::clone(&db),
@@ -126,7 +126,7 @@ fn dropping_scheduler_stops_thread() {
 fn stopping_scheduler_interrupts_a_long_interval() {
     let (_, db) = fresh_db_small_files("stop-long-interval");
     let scheduler = CompactionScheduler::start(
-        Arc::new(Mutex::new(db)),
+        Arc::new(RwLock::new(db)),
         SchedulerOptions {
             check_interval: Duration::from_secs(30),
             stale_ratio_threshold: 0.3,

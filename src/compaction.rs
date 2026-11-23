@@ -1,5 +1,5 @@
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -47,7 +47,10 @@ impl Default for SchedulerOptions {
 /// database has accumulated enough stale records.
 ///
 /// The scheduler requires the database to be wrapped in an
-/// `Arc<Mutex<Db>>` so it can share ownership with the application.
+/// `Arc<RwLock<Db>>` so it can share ownership with the application.
+/// It checks the stale ratio under a read lock and only takes the write
+/// lock when a compaction pass is due, so idle checks never block readers.
+/// Reads and writes still wait while a compaction pass runs.
 /// Dropping the `CompactionScheduler` (or calling [`stop`]) signals the
 /// thread to exit and waits for it to finish cleanly.
 ///
@@ -56,18 +59,19 @@ impl Default for SchedulerOptions {
 /// # Example
 ///
 /// ```rust,no_run
-/// use std::sync::{Arc, Mutex};
+/// use std::sync::{Arc, RwLock};
 /// use bitcask_rs::Db;
 /// use bitcask_rs::compaction::{CompactionScheduler, SchedulerOptions};
 ///
-/// let db = Arc::new(Mutex::new(Db::open("my-store").unwrap()));
+/// let db = Arc::new(RwLock::new(Db::open("my-store").unwrap()));
 /// let _sched = CompactionScheduler::start(
 ///     Arc::clone(&db),
 ///     SchedulerOptions::default(),
 /// );
 ///
-/// // Use the database normally through the Arc<Mutex<Db>>.
-/// db.lock().unwrap().put("k", "v").unwrap();
+/// // Writes take the write lock; reads can share the read lock.
+/// db.write().unwrap().put("k", "v").unwrap();
+/// assert_eq!(db.read().unwrap().get("k").unwrap(), Some(b"v".to_vec()));
 /// // The scheduler stops when `_sched` is dropped.
 /// ```
 pub struct CompactionScheduler {
@@ -77,17 +81,25 @@ pub struct CompactionScheduler {
 
 impl CompactionScheduler {
     /// Spawn the background compaction thread.
-    pub fn start(db: Arc<Mutex<Db>>, options: SchedulerOptions) -> Self {
+    pub fn start(db: Arc<RwLock<Db>>, options: SchedulerOptions) -> Self {
         let (shutdown, receiver) = mpsc::channel();
 
         let thread = thread::spawn(move || {
             while let Err(RecvTimeoutError::Timeout) = receiver.recv_timeout(options.check_interval)
             {
-                let mut guard = match db.lock() {
-                    Ok(guard) => guard,
-                    Err(_) => break, // mutex poisoned — give up
+                let due = match db.read() {
+                    Ok(guard) => guard.should_compact(options.stale_ratio_threshold),
+                    Err(_) => break, // lock poisoned — give up
                 };
+                if !due {
+                    continue;
+                }
 
+                let mut guard = match db.write() {
+                    Ok(guard) => guard,
+                    Err(_) => break, // lock poisoned — give up
+                };
+                // Re-check: another writer may have compacted between locks.
                 if guard.should_compact(options.stale_ratio_threshold) {
                     // Ignore individual compaction errors; the thread keeps
                     // running and will retry on the next interval.
