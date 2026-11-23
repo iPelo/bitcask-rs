@@ -5,6 +5,7 @@ use std::process;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use bitcask_rs::compaction::{CompactionScheduler, SchedulerOptions};
 use bitcask_rs::protocol::{format_response, parse_request, Request, Response};
 use bitcask_rs::Db;
 
@@ -20,6 +21,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
     let db = Arc::new(Mutex::new(Db::open(&config.path)?));
     let listener = TcpListener::bind(&config.addr)?;
+    let _scheduler = CompactionScheduler::start(
+        Arc::clone(&db),
+        SchedulerOptions {
+            stale_ratio_threshold: config.compact_threshold,
+            ..SchedulerOptions::default()
+        },
+    );
 
     eprintln!(
         "bitcask-server listening on {} with data at {}",
@@ -78,12 +86,14 @@ fn execute(request: Request, db: &Arc<Mutex<Db>>) -> Response {
 struct Config {
     path: String,
     addr: String,
+    compact_threshold: f64,
 }
 
 impl Config {
     fn from_args(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut path = "data".to_owned();
         let mut addr = "127.0.0.1:4000".to_owned();
+        let mut compact_threshold = 0.3;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -93,6 +103,10 @@ impl Config {
                 "--addr" => {
                     addr = args.next().ok_or("--addr requires a value")?;
                 }
+                "--compact-threshold" => {
+                    let value = args.next().ok_or("--compact-threshold requires a value")?;
+                    compact_threshold = parse_threshold(&value)?;
+                }
                 "--help" | "-h" => {
                     return Err(usage());
                 }
@@ -100,10 +114,53 @@ impl Config {
             }
         }
 
-        Ok(Self { path, addr })
+        Ok(Self {
+            path,
+            addr,
+            compact_threshold,
+        })
+    }
+}
+
+/// Parse a stale-record ratio in the range `0.0..=1.0`.
+fn parse_threshold(value: &str) -> Result<f64, String> {
+    match value.parse::<f64>() {
+        Ok(threshold) if (0.0..=1.0).contains(&threshold) => Ok(threshold),
+        _ => Err(format!(
+            "--compact-threshold must be a number between 0.0 and 1.0, got {value}"
+        )),
     }
 }
 
 fn usage() -> String {
-    "usage: bitcask-server [--path data-dir] [--addr host:port]".to_owned()
+    "usage: bitcask-server [--path data-dir] [--addr host:port] [--compact-threshold 0.0-1.0]"
+        .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Config, String> {
+        Config::from_args(args.iter().map(|arg| arg.to_string()))
+    }
+
+    #[test]
+    fn compact_threshold_defaults_to_point_three() {
+        assert_eq!(parse(&[]).unwrap().compact_threshold, 0.3);
+    }
+
+    #[test]
+    fn compact_threshold_flag_is_parsed() {
+        let config = parse(&["--compact-threshold", "0.5"]).unwrap();
+        assert_eq!(config.compact_threshold, 0.5);
+    }
+
+    #[test]
+    fn compact_threshold_outside_unit_range_is_rejected() {
+        assert!(parse(&["--compact-threshold", "1.5"]).is_err());
+        assert!(parse(&["--compact-threshold", "-0.1"]).is_err());
+        assert!(parse(&["--compact-threshold", "NaN"]).is_err());
+        assert!(parse(&["--compact-threshold"]).is_err());
+    }
 }
