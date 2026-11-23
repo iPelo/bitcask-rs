@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bitcask_rs::Db;
+use bitcask_rs::{Db, Options};
 use proptest::prelude::*;
 
 /// A key/value mutation applied to both the database and the reference model.
@@ -41,14 +41,57 @@ fn all_possible_keys() -> Vec<Vec<u8>> {
     keys
 }
 
+/// An operation for the lifecycle model test: a mutation, or an engine
+/// event that must not change the visible contents of the database.
+#[derive(Clone, Debug)]
+enum LifecycleOp {
+    Mutate(Op),
+    Compact,
+    Reopen,
+}
+
+fn lifecycle_op_strategy() -> impl Strategy<Value = LifecycleOp> {
+    prop_oneof![
+        8 => op_strategy().prop_map(LifecycleOp::Mutate),
+        1 => Just(LifecycleOp::Compact),
+        1 => Just(LifecycleOp::Reopen),
+    ]
+}
+
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// A fresh, empty database in a unique directory.
-fn fresh_db() -> Db {
+/// A unique, empty directory for one test case.
+fn fresh_path() -> String {
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = format!("target/test-data/property-{id}");
     let _ = std::fs::remove_dir_all(&path);
-    Db::open(&path).expect("open database")
+    path
+}
+
+/// A fresh, empty database in a unique directory.
+fn fresh_db() -> Db {
+    Db::open(fresh_path()).expect("open database")
+}
+
+/// Options with a tiny file cap so data files rotate every few records,
+/// giving compaction immutable files to rewrite.
+fn small_file_options(path: &str) -> Options {
+    let mut options = Options::new(path);
+    options.max_data_file_size = 64;
+    options
+}
+
+fn apply(db: &mut Db, model: &mut HashMap<Vec<u8>, Vec<u8>>, op: Op) {
+    match op {
+        Op::Put(key, value) => {
+            db.put(&key, &value).expect("put");
+            model.insert(key, value);
+        }
+        Op::Delete(key) => {
+            db.delete(&key).expect("delete");
+            model.remove(&key);
+        }
+    }
 }
 
 proptest! {
@@ -60,16 +103,7 @@ proptest! {
         let mut model: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
         for op in ops {
-            match op {
-                Op::Put(key, value) => {
-                    db.put(&key, &value).expect("put");
-                    model.insert(key, value);
-                }
-                Op::Delete(key) => {
-                    db.delete(&key).expect("delete");
-                    model.remove(&key);
-                }
-            }
+            apply(&mut db, &mut model, op);
         }
 
         for key in all_possible_keys() {
@@ -99,5 +133,45 @@ proptest! {
         db.put(&key, &value).expect("put");
         db.delete(&key).expect("delete");
         prop_assert_eq!(db.get(&key).expect("get"), None);
+    }
+}
+
+proptest! {
+    // Compaction and reopen sync files to disk, which is slow on some
+    // platforms, so this test runs fewer cases than the default 256.
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    /// Interleaving compaction and reopening with puts and deletes never
+    /// changes what `get` returns, checked after every step and once more
+    /// after a final reopen.
+    #[test]
+    fn get_matches_a_hashmap_model_across_compaction_and_reopen(
+        ops in prop::collection::vec(lifecycle_op_strategy(), 0..96),
+    ) {
+        let path = fresh_path();
+        let mut db = Db::open_with_options(small_file_options(&path)).expect("open");
+        let mut model: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+
+        for op in ops {
+            match op {
+                LifecycleOp::Mutate(op) => apply(&mut db, &mut model, op),
+                LifecycleOp::Compact => db.compact().expect("compact"),
+                LifecycleOp::Reopen => {
+                    drop(db);
+                    db = Db::open_with_options(small_file_options(&path)).expect("reopen");
+                }
+            }
+            for key in all_possible_keys() {
+                prop_assert_eq!(db.get(&key).expect("get"), model.get(&key).cloned());
+            }
+            prop_assert_eq!(db.len(), model.len());
+        }
+
+        drop(db);
+        let db = Db::open_with_options(small_file_options(&path)).expect("final reopen");
+        for key in all_possible_keys() {
+            prop_assert_eq!(db.get(&key).expect("get"), model.get(&key).cloned());
+        }
+        prop_assert_eq!(db.len(), model.len());
     }
 }
