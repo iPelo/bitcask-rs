@@ -136,10 +136,25 @@ proptest! {
     }
 }
 
+/// Cases for the compaction-and-reopen model test.
+///
+/// Compaction and reopen sync files to disk, which is slow on some platforms,
+/// so this test runs 32 cases by default instead of proptest's 256. Setting
+/// `PROPTEST_CASES` (CI uses `PROPTEST_CASES=256`) overrides the default.
+fn lifecycle_config() -> ProptestConfig {
+    let config = ProptestConfig::default();
+    if std::env::var_os("PROPTEST_CASES").is_some() {
+        config
+    } else {
+        ProptestConfig {
+            cases: 32,
+            ..config
+        }
+    }
+}
+
 proptest! {
-    // Compaction and reopen sync files to disk, which is slow on some
-    // platforms, so this test runs fewer cases than the default 256.
-    #![proptest_config(ProptestConfig::with_cases(32))]
+    #![proptest_config(lifecycle_config())]
 
     /// Interleaving compaction and reopening with puts and deletes never
     /// changes what `get` returns, checked after every step and once more

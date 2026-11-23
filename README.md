@@ -168,6 +168,14 @@ writes, CRC corruption, interrupted compaction) and `proptest` model tests that
 compare the store against a `HashMap` across puts, deletes, compaction and
 reopening.
 
+The compaction-and-reopen model test syncs files to disk, so it runs 32 cases
+by default to keep local runs fast. CI runs every property test with 256
+cases; do the same locally with:
+
+```bash
+PROPTEST_CASES=256 cargo test --test property
+```
+
 ## Limitations
 
 This is a learning project, not production storage:
