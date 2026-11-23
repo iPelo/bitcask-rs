@@ -1,7 +1,7 @@
 //! Public API for the Bitcask-style key-value store.
 //!
 //! A [`Db`] is an append-only log of records plus an in-memory index
-//! ([`keydir::KeyDir`]) mapping each key to the position of its latest record.
+//! ([`log::KeyDir`]) mapping each key to the position of its latest record.
 //! Writes append; reads index-lookup then seek; deletes append a tombstone.
 
 pub mod compaction;
@@ -9,15 +9,6 @@ pub mod error;
 pub mod log;
 pub mod protocol;
 pub mod record;
-
-// Keep the original import paths available after combining the source files.
-pub mod keydir {
-    pub use crate::log::{KeyDir, RecordPos};
-}
-
-pub mod server {
-    pub use crate::protocol;
-}
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
