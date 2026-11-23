@@ -2,19 +2,6 @@
 /target/
 **/*.rs.bk
 
-# Private notes and local instruction files
-/[Aa][Gg][Ee][Nn][Tt][Ss].md
-/[Cc][Ll][Aa][Uu][Dd][Ee].md
-/.[Aa][Gg][Ee][Nn][Tt][Ss]/
-/.[Cc][Ll][Aa][Uu][Dd][Ee]/
-/.[Cc][Oo][Dd][Ee][Xx]/
-/INSTRUCTIONS.md
-/NOTES.md
-/PRIVATE*.md
-/README-*.md
-/personal*.md
-/scratch*.md
-
 # RustRover / JetBrains local project state
 /.idea/
 *.iml
